@@ -1,0 +1,5 @@
+bin
+cmd_scripts
+cmd
+*.sublime-project
+*.sublime-workspace
