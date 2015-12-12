@@ -1,5 +1,5 @@
 bin
 cmd_scripts
-cmd
+cmd.lnk
 *.sublime-project
 *.sublime-workspace
