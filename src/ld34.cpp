@@ -6,8 +6,8 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#define WINDOW_WIDTH        1280
-#define WINDOW_HEIGHT       720
+#define DISPLAY_WIDTH       256
+#define DISPLAY_HEIGHT      144
 #define WINDOW_TITLE        "LD 34\0"
 #define BYTES_PER_PIXEL     4
 #define TIME_PER_FRAME      0.03333
@@ -15,13 +15,15 @@
 #define internal            static
 #define global              static
 
-#define TILE_SIZE           32
+#define TILE_SIZE           16
+#define SCALE               6
 
 // NOTE (Mathew): Textures
 #define CRATE_TILE_TEXTURE  0
 #define WALL_TILE_TEXTURE   1
 #define WATER_TILE_TEXTURE  2
-#define NUM_TEXTURES        3
+#define PLAYER_TEXTURE      3
+#define NUM_TEXTURES        4
 
 // NOTE (Mathew): Tiles
 #define EMPTY_TILE          -1
@@ -103,7 +105,8 @@ struct Display {
     SDL_PixelFormat pixel_format;
     void* pixels_buffer;
     i32 buffer_pitch;
-    V2i32 size;
+    V2i32 buffer_size;
+    V2i32 window_size;
     char* title;
 };
 
@@ -117,6 +120,12 @@ struct Tile {
     bool solid;
 };
 
+struct Player {
+    V2i32 pos;
+    V2i32 size;
+    Texture* texture;	
+};
+
 struct Game {
     Texture* textures;
     i8* map;
@@ -124,16 +133,17 @@ struct Game {
     V2i32 map_size;
     V2i32 cam_pos;
     V2i32 cam_size;
+    Player player;
 };
 
 void WritePixelsToDisplay(void* pixels, Display* display, i32 w, i32 h, i32 x, i32 y) {
     for(i32 ya = y, py = 0; ya < y + h; ya++, py++) {
         for(i32 xa = x, px = 0; xa < x + w; xa++, px++) {
-            if(xa >= 0 && xa <= display->size.w && ya >= 0 && ya <= display->size.h) {
+            if(xa >= 0 && xa <= display->buffer_size.w && ya >= 0 && ya <= display->buffer_size.h) {
                 u32 pixel = *((u32*)pixels + (py * w) + px);
 
                 if(pixel != 0x00FF00FF) {
-                    *((u32*)display->pixels_buffer + (ya * display->size.w) + xa) = pixel;
+                    *((u32*)display->pixels_buffer + (ya * display->buffer_size.w) + xa) = pixel;
                 }
             }
         }
@@ -218,8 +228,7 @@ void ScaleTexture(Texture* texture, i32 sx, i32 sy) {
 int main(int argc, char** argv) {
     Display display = {};
     Game game = {};
-    display.size = {1280, 720};
-    display.buffer_pitch = display.size.w * BYTES_PER_PIXEL;
+    display.window_size = {DISPLAY_WIDTH * SCALE, DISPLAY_HEIGHT * SCALE};
     display.title = "LD 34\0";
 
     if(SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -239,7 +248,7 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    display.window = SDL_CreateWindow(display.title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, display.size.w, display.size.h, SDL_WINDOW_SHOWN);
+    display.window = SDL_CreateWindow(display.title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, display.window_size.w, display.window_size.h, SDL_WINDOW_SHOWN);
     if(!display.window) {
         printf("Error - Could not create window. %s.\n", SDL_GetError());
         return -1;
@@ -253,27 +262,35 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    display.render_texture = SDL_CreateTexture(display.renderer, display.pixel_format.format, SDL_TEXTUREACCESS_STREAMING, display.size.w, display.size.h);
+    display.buffer_pitch = display.buffer_size.w * BYTES_PER_PIXEL;
+    display.buffer_size = {DISPLAY_WIDTH, DISPLAY_HEIGHT};
+    display.render_texture = SDL_CreateTexture(display.renderer, display.pixel_format.format, SDL_TEXTUREACCESS_STREAMING, display.buffer_size.w, display.buffer_size.h);
     if(!display.render_texture) {
         printf("Error - Could not create render_texture. %s.\n", SDL_GetError());
         return -1;
     }
 
-    display.pixels_buffer = malloc(display.size.w * display.size.h * BYTES_PER_PIXEL);
+    display.pixels_buffer = malloc(display.buffer_size.w * display.buffer_size.h * BYTES_PER_PIXEL);
     if(!display.pixels_buffer) {
         printf("Error - Could not create pixel_buffer. %s.\n", SDL_GetError());
         return -1;
     }
 
-    game.cam_size = display.size;
+    game.cam_size = display.buffer_size;
     game.cam_pos = {0, 0};
+
+    game.player.size = {16, 32};
+    game.player.pos = {79, 67};
 
     Texture texture_sheet;
     LoadTextureFromFile(&texture_sheet, "../res/graphics/textures.png", &display.pixel_format);
     game.textures = (Texture*)malloc(NUM_TEXTURES * sizeof(Texture));
-    SpliceTexture(&texture_sheet, &game.textures[CRATE_TILE_TEXTURE], 0, 0, 32, 32, false, false);
-    SpliceTexture(&texture_sheet, &game.textures[WALL_TILE_TEXTURE], 32, 0, 32, 32, false, false);
-    SpliceTexture(&texture_sheet, &game.textures[WATER_TILE_TEXTURE], 64, 0, 32, 32, false, false);
+    SpliceTexture(&texture_sheet, &game.textures[CRATE_TILE_TEXTURE], 0, 0, TILE_SIZE, TILE_SIZE, false, false);
+    SpliceTexture(&texture_sheet, &game.textures[WALL_TILE_TEXTURE], 16, 0, TILE_SIZE, TILE_SIZE, false, false);
+    SpliceTexture(&texture_sheet, &game.textures[WATER_TILE_TEXTURE], 32, 0, TILE_SIZE, TILE_SIZE, false, false);
+    SpliceTexture(&texture_sheet, &game.textures[PLAYER_TEXTURE], 0, 96, game.player.size.w, game.player.size.h, false, false);
+
+    game.player.texture = &game.textures[PLAYER_TEXTURE];
 
     game.tiles = (Tile*)malloc(NUM_TILES * sizeof(Tile));
     game.tiles[CRATE_TILE] = {&game.textures[CRATE_TILE_TEXTURE], true};
@@ -328,18 +345,67 @@ int main(int argc, char** argv) {
         }
 
         if(keys[MOVE_LEFT] && !keys[MOVE_RIGHT]) {
-            game.cam_pos.x -= speed;
+            game.player.pos.x -= speed;
         }
         else if(keys[MOVE_RIGHT] && !keys[MOVE_LEFT]) {
-            game.cam_pos.x += speed;
+            game.player.pos.x += speed;
         }
 
         if(keys[MOVE_UP] && !keys[MOVE_DOWN]) {
-            game.cam_pos.y -= speed;
+            game.player.pos.y -= speed;
         }
         else if(keys[MOVE_DOWN] && !keys[MOVE_UP]) {
-            game.cam_pos.y += speed;
+            game.player.pos.y += speed;
         }
+
+        if(game.player.pos.x + (game.player.size.w / 2) > (game.cam_size.x / 2) && game.player.pos.x + (game.player.size.w / 2) < (game.map_size.w * TILE_SIZE) - (game.cam_size.x / 2)) {
+            game.cam_pos.x = game.player.pos.x - (game.cam_size.x / 2);
+        }
+
+        if(game.player.pos.y + (game.player.size.h / 2) > (game.cam_size.y / 2) && game.player.pos.y + (game.player.size.h / 2) < (game.map_size.h * TILE_SIZE) - (game.cam_size.y / 2)) {
+            game.cam_pos.y = game.player.pos.y - (game.cam_size.y / 2);
+        }
+
+        if(game.cam_pos.x <= 0) {
+            game.cam_pos.x = 0;
+        }
+        else if(game.cam_pos.x + game.cam_size.w >= game.map_size.w * TILE_SIZE) {
+            game.cam_pos.x = (game.map_size.w * TILE_SIZE) - game.cam_size.w;
+        }
+
+        if(game.cam_pos.y <= 0) {
+            game.cam_pos.y = 0;
+        }
+        else if(game.cam_pos.y + game.cam_size.h >= game.map_size.h * TILE_SIZE) {
+            game.cam_pos.y = (game.map_size.h * TILE_SIZE) - game.cam_size.h;
+        }
+
+        SDL_RenderClear(display.renderer);
+        for(i32 i = 0; i < display.buffer_size.w * display.buffer_size.h; i++) {
+            *((u32*)display.pixels_buffer + i) = 0xFFFFFFFF;
+        }
+
+        for(i32 y = 0; y < game.map_size.h; ++y) {
+            for(i32 x = 0; x < game.map_size.w; ++x) {
+                i32 tile_x = x * TILE_SIZE - game.cam_pos.x;
+                i32 tile_y = y * TILE_SIZE - game.cam_pos.y;
+
+                if(tile_x + TILE_SIZE >= 0 && tile_x < display.buffer_size.w && tile_y + TILE_SIZE >= 0 && tile_y < display.buffer_size.h) {
+                    i32 tile = (i32)game.map[(y * game.map_size.w) + x];
+                    if(tile != EMPTY_TILE) {
+                        WritePixelsToDisplay(game.tiles[tile].texture->pixels, &display, TILE_SIZE, TILE_SIZE, tile_x, tile_y);
+                    }
+                }
+
+            }
+        }
+
+        WritePixelsToDisplay(game.player.texture->pixels, &display, game.player.size.w, game.player.size.h, game.player.pos.x - game.cam_pos.x, game.player.pos.y - game.cam_pos.y);
+
+        SDL_LockTexture(display.render_texture, NULL, &display.pixels_buffer, &display.buffer_pitch);
+        SDL_UnlockTexture(display.render_texture);
+        SDL_RenderCopy(display.renderer, display.render_texture, NULL, NULL);
+        SDL_RenderPresent(display.renderer);
 
         f32 current_time = SDL_GetTicks() / 1000.0f;
         f32 time_this_frame = current_time - last_time;
@@ -363,31 +429,6 @@ int main(int argc, char** argv) {
         else {
             printf("Warning - this frame took %.3f ms. Targeted ms/frame is %.3f.\n", time_this_frame * 1000.0f, TIME_PER_FRAME * 1000.0f);
         }
-
-        SDL_RenderClear(display.renderer);
-        for(i32 i = 0; i < display.size.w * display.size.h; i++) {
-            *((u32*)display.pixels_buffer + i) = 0xFFFFFFFF;
-        }
-
-        for(i32 y = 0; y < game.map_size.h; ++y) {
-            for(i32 x = 0; x < game.map_size.w; ++x) {
-                i32 tile_x = x * TILE_SIZE + game.cam_pos.x;
-                i32 tile_y = y * TILE_SIZE + game.cam_pos.y;
-
-                if(tile_x + TILE_SIZE >= 0 && tile_x < display.size.w && tile_y + TILE_SIZE >= 0 && tile_y < display.size.h) {
-                    i32 tile = (i32)game.map[(y * game.map_size.w) + x];
-                    if(tile != EMPTY_TILE) {
-                        WritePixelsToDisplay(game.tiles[tile].texture->pixels, &display, TILE_SIZE, TILE_SIZE, tile_x, tile_y);
-                    }
-                }
-
-            }
-        }
-
-        SDL_LockTexture(display.render_texture, NULL, &display.pixels_buffer, &display.buffer_pitch);
-        SDL_UnlockTexture(display.render_texture);
-        SDL_RenderCopy(display.renderer, display.render_texture, NULL, NULL);
-        SDL_RenderPresent(display.renderer);
     }
 
     return 0;
